@@ -1,3 +1,4 @@
 build/
 *.exr
 *.tga
+!scenes/*
