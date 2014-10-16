@@ -160,6 +160,10 @@ Volume                  { return VOLUME; }
 VolumeIntegrator        { return VOLUMEINTEGRATOR; }
 WorldBegin              { return WORLDBEGIN; }
 WorldEnd                { return WORLDEND; }
+DifferentialBackground  { return DIFFERENTIALBACKGROUND; }
+DifferentialExposure    { return DIFFERENTIALEXPOSURE; }
+DifferentialBegin       { return DIFFERENTIALBEGIN; }
+DifferentialEnd         { return DIFFERENTIALEND; }
 {WHITESPACE} /* do nothing */
 \n { line_num++; }
 {NUMBER} {

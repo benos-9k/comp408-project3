@@ -84,5 +84,10 @@ void pbrtObjectBegin(const string &name);
 void pbrtObjectEnd();
 void pbrtObjectInstance(const string &name);
 void pbrtWorldEnd();
+void pbrtDifferentialConfig();
+void pbrtDifferentialBackground(const ParamSet &params);
+void pbrtDifferentialExposure(const string &name, const ParamSet &params);
+void pbrtDifferentialBegin();
+void pbrtDifferentialEnd();
 
 #endif // PBRT_CORE_API_H

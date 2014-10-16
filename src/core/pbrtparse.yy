@@ -172,6 +172,7 @@ ParamArray *ribarray;
 %token RENDERER REVERSEORIENTATION ROTATE SAMPLER SCALE SHAPE STARTTIME
 %token SURFACEINTEGRATOR TEXTURE TRANSFORMBEGIN TRANSFORMEND TRANSFORMTIMES
 %token TRANSFORM TRANSLATE VOLUME VOLUMEINTEGRATOR WORLDBEGIN WORLDEND
+%token DIFFERENTIALBACKGROUND DIFFERENTIALEXPOSURE DIFFERENTIALBEGIN DIFFERENTIALEND
 
 %token HIGH_PRECEDENCE
 
@@ -635,6 +636,36 @@ pbrt_stmt: ACCELERATOR STRING paramlist
 | WORLDEND
 {
     pbrtWorldEnd();
+}
+
+
+| DIFFERENTIALBACKGROUND paramlist
+{
+    ParamSet params;
+    InitParamSet(params, SPECTRUM_ILLUMINANT);
+    pbrtDifferentialBackground(params);
+    FreeArgs();
+}
+
+
+| DIFFERENTIALEXPOSURE STRING paramlist
+{
+    ParamSet params;
+    InitParamSet(params, SPECTRUM_ILLUMINANT);
+    pbrtDifferentialExposure($2, params);
+    FreeArgs();
+}
+
+
+| DIFFERENTIALBEGIN
+{
+	pbrtDifferentialBegin();
+}
+
+
+| DIFFERENTIALEND
+{
+	pbrtDifferentialEnd();
 };
 
 

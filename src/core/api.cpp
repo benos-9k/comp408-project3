@@ -1182,6 +1182,26 @@ void pbrtWorldEnd() {
     ImageTexture<RGBSpectrum, Spectrum>::ClearCache();
 }
 
+void pbrtDifferentialBackground(const ParamSet &params) {
+	string filename = params.FindOneFilename("filename", "");
+	if (filename.empty()) {
+		Error("DifferentialBackground must specify parameter 'filename'");
+		exit(1);
+	}
+	Warning(filename.c_str());
+}
+
+void pbrtDifferentialExposure(const string &name, const ParamSet &params) {
+	Warning(name.c_str());
+}
+
+void pbrtDifferentialBegin() {
+	Warning("DifferentialBegin");
+}
+
+void pbrtDifferentialEnd() {
+	Warning("DifferentialEnd");
+}
 
 Scene *RenderOptions::MakeScene() {
     // Initialize _volumeRegion_ from volume region(s)
