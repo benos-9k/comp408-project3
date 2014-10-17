@@ -3,8 +3,9 @@ Film "image"
 LookAt 0 .2 .2    -.02 .1 0  0 1 0
 Camera "perspective" "float fov" [60]
 
-DifferentialBackground "string filename" "difftest.exr"
-DifferentialExposure "linear" "float exposure" [1]
+DifferentialEnable
+DifferentialBackground "string filename" "bg0.exr"
+DifferentialHDR "exponential" "float exposure" [0.5] "float diffscale" [2.0]
 
 WorldBegin
 

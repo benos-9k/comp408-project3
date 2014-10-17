@@ -161,7 +161,8 @@ VolumeIntegrator        { return VOLUMEINTEGRATOR; }
 WorldBegin              { return WORLDBEGIN; }
 WorldEnd                { return WORLDEND; }
 DifferentialBackground  { return DIFFERENTIALBACKGROUND; }
-DifferentialExposure    { return DIFFERENTIALEXPOSURE; }
+DifferentialHDR         { return DIFFERENTIALHDR; }
+DifferentialEnable      { return DIFFERENTIALENABLE; }
 DifferentialBegin       { return DIFFERENTIALBEGIN; }
 DifferentialEnd         { return DIFFERENTIALEND; }
 {WHITESPACE} /* do nothing */

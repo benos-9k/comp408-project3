@@ -39,6 +39,8 @@
 // core/imageio.h*
 #include "pbrt.h"
 
+extern float *writeImageRedirect;
+
 // ImageIO Declarations
 RGBSpectrum *ReadImage(const string &name, int *xSize, int *ySize);
 void WriteImage(const string &name, float *pixels, float *alpha,

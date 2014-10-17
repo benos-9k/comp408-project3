@@ -86,7 +86,8 @@ void pbrtObjectInstance(const string &name);
 void pbrtWorldEnd();
 void pbrtDifferentialConfig();
 void pbrtDifferentialBackground(const ParamSet &params);
-void pbrtDifferentialExposure(const string &name, const ParamSet &params);
+void pbrtDifferentialHDR(const string &name, const ParamSet &params);
+void pbrtDifferentialEnable();
 void pbrtDifferentialBegin();
 void pbrtDifferentialEnd();
 

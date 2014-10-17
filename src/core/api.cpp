@@ -186,11 +186,14 @@ struct RenderOptions {
     string CameraName;
     ParamSet CameraParams;
     TransformSet CameraToWorld;
-    vector<Light *> lights;
-    vector<Reference<Primitive> > primitives;
+    vector<Light *> lights0, lights1;
+    vector<Reference<Primitive> > primitives0, primitives1;
     mutable vector<VolumeRegion *> volumeRegions;
     map<string, vector<Reference<Primitive> > > instances;
     vector<Reference<Primitive> > *currentInstance;
+	ParamSet differentialBackgroundParams;
+	string differentialHDRName;
+	ParamSet differentialHDRParams;
 };
 
 
@@ -207,6 +210,7 @@ RenderOptions::RenderOptions() {
     VolIntegratorName = "emission";
     CameraName = "perspective";
     currentInstance = NULL;
+	differentialHDRName = "linear";
 }
 
 
@@ -282,6 +286,9 @@ static vector<GraphicsState> pushedGraphicsStates;
 static vector<TransformSet> pushedTransforms;
 static vector<uint32_t> pushedActiveTransformBits;
 static TransformCache transformCache;
+
+static bool differentialEnable = false;
+static bool differentialOn = false;
 
 // API Macros
 #define VERIFY_INITIALIZED(func) \
@@ -974,8 +981,10 @@ void pbrtLightSource(const string &name, const ParamSet &params) {
     Light *lt = MakeLight(name, curTransform[0], params);
     if (lt == NULL)
         Error("pbrtLightSource: light type \"%s\" unknown.", name.c_str());
-    else
-        renderOptions->lights.push_back(lt);
+	else {
+		if (!differentialOn) renderOptions->lights0.push_back(lt);
+        renderOptions->lights1.push_back(lt);
+	}
 }
 
 
@@ -1051,9 +1060,11 @@ void pbrtShape(const string &name, const ParamSet &params) {
     }
     
     else {
-        renderOptions->primitives.push_back(prim);
+		if (!differentialOn) renderOptions->primitives0.push_back(prim);
+		renderOptions->primitives1.push_back(prim);
         if (area != NULL) {
-            renderOptions->lights.push_back(area);
+			if (!differentialOn) renderOptions->lights0.push_back(area);
+            renderOptions->lights1.push_back(area);
         }
     }
 }
@@ -1143,7 +1154,8 @@ void pbrtObjectInstance(const string &name) {
         world2instance[1], renderOptions->transformEndTime);
     Reference<Primitive> prim =
         new TransformedPrimitive(in[0], animatedWorldToInstance);
-    renderOptions->primitives.push_back(prim);
+	if (!differentialOn) renderOptions->primitives0.push_back(prim);
+	renderOptions->primitives1.push_back(prim);
 }
 
 
@@ -1160,13 +1172,125 @@ void pbrtWorldEnd() {
         pushedTransforms.pop_back();
     }
 
-    // Create scene and render
-    Renderer *renderer = renderOptions->MakeRenderer();
-    Scene *scene = renderOptions->MakeScene();
-    if (scene && renderer) renderer->Render(scene);
-    TasksCleanup();
-    delete renderer;
-    delete scene;
+	int w, h;
+	w = renderOptions->FilmParams.FindOneInt("xresolution", 0);
+	h = renderOptions->FilmParams.FindOneInt("yresolution", 0);
+
+	// load diff background
+	RGBSpectrum *diffbg = NULL;
+	if (differentialEnable) {
+		string filename = renderOptions->differentialBackgroundParams.FindOneFilename("filename", "");
+		if (!filename.empty()) {
+			int diffw, diffh;
+			diffbg = ReadImage(filename, &diffw, &diffh);
+			if (!(w || h)) {
+				// scene has no specified resolution, use background
+				w = diffw;
+				h = diffh;
+			}
+			if (diffw != w || diffh != h) {
+				// scene and background resolution differ
+				Error("DifferentialRender: background image (%dx%d) and scene (%dx%d) resolutions differ", diffw, diffh, w, h);
+				exit(1);
+			}
+		}
+	}
+
+	renderOptions->FilmParams.AddInt("xresolution", &w, 1);
+	renderOptions->FilmParams.AddInt("yresolution", &h, 1);
+
+	if (differentialEnable) {
+		// Create scene and render
+		differentialOn = false;
+		Renderer *renderer0 = renderOptions->MakeRenderer();
+		Scene *scene0 = renderOptions->MakeScene();
+		differentialOn = true;
+		Renderer *renderer1 = renderOptions->MakeRenderer();
+		Scene *scene1 = renderOptions->MakeScene();
+
+		float *image0 = new float[w * h * 3];
+		float *image1 = new float[w * h * 3];
+		float *image2 = new float[w * h * 3];
+
+		if (!scene0 || !renderer0 || !scene1 || !renderer1) {
+			Error("fgfdsfdhdgsdgshgs");
+			exit(1);
+		}
+
+		// render exclusive of differential
+		differentialOn = false;
+		writeImageRedirect = image0;
+		renderer0->Render(scene0);
+
+		// render inclusive of differential
+		differentialOn = true;
+		writeImageRedirect = image1;
+		renderer1->Render(scene1);
+
+		differentialOn = false;
+		writeImageRedirect = NULL;
+
+		TasksCleanup();
+		delete renderer0;
+		delete scene0;
+		// avoid multiple deletes by leaking memory
+		//delete renderer1;
+		//delete scene1;
+
+		// differential
+		Warning("diffffffffffffffffffff");
+
+		float exposure = renderOptions->differentialHDRParams.FindOneFloat("exposure", 1.0);
+		float diffscale = renderOptions->differentialHDRParams.FindOneFloat("diffscale", 1.0);
+		int hdrtype = renderOptions->differentialHDRName == "exponential" ? 1 : 0;
+
+		for (int i = 0; i < w * h; i++) {
+			float bg[3] { 0, 0, 0};
+			if (diffbg) {
+				diffbg[i].ToRGB(bg);
+				// inverse hdr
+				if (hdrtype == 1) {
+					// exp
+					bg[0] = log(1 - bg[0]) / -exposure;
+					bg[1] = log(1 - bg[1]) / -exposure;
+					bg[2] = log(1 - bg[2]) / -exposure;
+				} else {
+					// linear
+					bg[0] /= exposure;
+					bg[1] /= exposure;
+					bg[2] /= exposure;
+				}
+			}
+			image2[3 * i + 0] = diffscale * (image1[3 * i + 0] - image0[3 * i + 0]) + bg[0];
+			image2[3 * i + 1] = diffscale * (image1[3 * i + 1] - image0[3 * i + 1]) + bg[1];
+			image2[3 * i + 2] = diffscale * (image1[3 * i + 2] - image0[3 * i + 2]) + bg[2];
+		}
+
+		string filename = renderOptions->FilmParams.FindOneFilename("filename", "pbrt.exr");
+
+		WriteImage(filename, image2, NULL, w, h, w, h, 0, 0);
+
+		delete[] image0;
+		delete[] image1;
+		delete[] image2;
+
+	} else {
+		// Create scene and render
+		differentialOn = true;
+		Renderer *renderer = renderOptions->MakeRenderer();
+		Scene *scene = renderOptions->MakeScene();
+		differentialOn = false;
+		if (!scene || !renderer) {
+			Error("argdsfgfdhsgdh");
+			exit(1);
+		}
+		renderer->Render(scene);
+		TasksCleanup();
+		delete renderer;
+		delete scene;
+	}
+
+	if (diffbg) delete[] diffbg;
 
     // Clean up after rendering
     graphicsState = GraphicsState();
@@ -1189,21 +1313,32 @@ void pbrtDifferentialBackground(const ParamSet &params) {
 		exit(1);
 	}
 	Warning(filename.c_str());
+	renderOptions->differentialBackgroundParams = params;
 }
 
-void pbrtDifferentialExposure(const string &name, const ParamSet &params) {
+void pbrtDifferentialHDR(const string &name, const ParamSet &params) {
 	Warning(name.c_str());
+	renderOptions->differentialHDRName = name;
+	renderOptions->differentialHDRParams = params;
+}
+
+void pbrtDifferentialEnable() {
+	differentialEnable = true;
 }
 
 void pbrtDifferentialBegin() {
 	Warning("DifferentialBegin");
+	differentialOn = true;
 }
 
 void pbrtDifferentialEnd() {
 	Warning("DifferentialEnd");
+	differentialOn = false;
 }
 
 Scene *RenderOptions::MakeScene() {
+	auto &primitives = differentialOn ? primitives1 : primitives0;
+	auto &lights = differentialOn ? lights1 : lights0;
     // Initialize _volumeRegion_ from volume region(s)
     VolumeRegion *volumeRegion;
     if (volumeRegions.size() == 0)
@@ -1228,6 +1363,8 @@ Scene *RenderOptions::MakeScene() {
 
 
 Renderer *RenderOptions::MakeRenderer() const {
+	auto &primitives = differentialOn ? primitives1 : primitives0;
+	auto &lights = differentialOn ? lights1 : lights0;
     Renderer *renderer = NULL;
     Camera *camera = MakeCamera();
     if (RendererName == "metropolis") {

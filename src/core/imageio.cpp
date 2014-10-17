@@ -40,6 +40,8 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+float *writeImageRedirect = NULL;
+
 // ImageIO Local Declarations
 static RGBSpectrum *ReadImageEXR(const string &name, int *width, int *height);
 static void WriteImageEXR(const string &name, float *pixels,
@@ -83,6 +85,11 @@ RGBSpectrum *ReadImage(const string &name, int *width, int *height) {
 
 void WriteImage(const string &name, float *pixels, float *alpha, int xRes,
                 int yRes, int totalXRes, int totalYRes, int xOffset, int yOffset) {
+	if (writeImageRedirect) {
+		// hackity hackity
+		memcpy(writeImageRedirect, pixels, xRes * yRes * 3 * sizeof(float));
+		return;
+	}
     if (name.size() >= 5) {
         uint32_t suffixOffset = name.size() - 4;
 #ifdef PBRT_HAS_OPENEXR
