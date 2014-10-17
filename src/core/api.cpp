@@ -29,6 +29,7 @@
 
  */
 
+#include <limits>
 
 // core/api.cpp*
 #include "stdafx.h"
@@ -165,9 +166,9 @@ private:
 struct RenderOptions {
     // RenderOptions Public Methods
     RenderOptions();
-    Scene *MakeScene();
+    Scene *MakeScene(vector<Reference<Primitive>> &primitives, vector<Light *> &lights, vector<VolumeRegion *> &volumeRegions);
     Camera *MakeCamera() const;
-    Renderer *MakeRenderer() const;
+    Renderer *MakeRenderer(vector<Reference<Primitive>> &primitives, vector<Light *> &lights, vector<VolumeRegion *> &volumeRegions) const;
 
     // RenderOptions Public Data
     float transformStartTime, transformEndTime;
@@ -187,8 +188,9 @@ struct RenderOptions {
     ParamSet CameraParams;
     TransformSet CameraToWorld;
     vector<Light *> lights0, lights1;
-    vector<Reference<Primitive> > primitives0, primitives1;
-    mutable vector<VolumeRegion *> volumeRegions;
+	// scene - differential, whole scene, differential
+    vector<Reference<Primitive> > primitives0, primitives1, primitives2;
+    mutable vector<VolumeRegion *> volumeRegions0, volumeRegions1;
     map<string, vector<Reference<Primitive> > > instances;
     vector<Reference<Primitive> > *currentInstance;
 	ParamSet differentialBackgroundParams;
@@ -270,7 +272,30 @@ private:
     MemoryArena arena;
 };
 
+class MaskSurfaceIntegrator : public SurfaceIntegrator {
+public:
+	virtual Spectrum Li(const Scene *scene, const Renderer *renderer,
+        const RayDifferential &ray, const Intersection &isect,
+		const Sample *sample, RNG &rng, MemoryArena &arena) const {
+		return 1.f;
+	}
+};
 
+class MaskVolumeIntegrator : public VolumeIntegrator {
+public:
+	virtual Spectrum Li(const Scene *scene, const Renderer *renderer,
+        const RayDifferential &ray, const Sample *sample, RNG &rng,
+		Spectrum *transmittance, MemoryArena &arena) const {
+		*transmittance = 1.f;
+		return 0.f;
+	}
+
+    virtual Spectrum Transmittance(const Scene *scene,
+        const Renderer *renderer, const RayDifferential &ray,
+        const Sample *sample, RNG &rng, MemoryArena &arena) const {
+		return 1.f;
+	}
+};
 
 // API Static Data
 #define STATE_UNINITIALIZED  0
@@ -562,6 +587,8 @@ SurfaceIntegrator *MakeSurfaceIntegrator(const string &name,
         si = CreateDiffusePRTIntegratorSurfaceIntegrator(paramSet);
     else if (name == "glossyprt")
         si = CreateGlossyPRTIntegratorSurfaceIntegrator(paramSet);
+	else if (name == "__mask")
+		si = new MaskSurfaceIntegrator();
     else
         Warning("Surface integrator \"%s\" unknown.", name.c_str());
 
@@ -577,6 +604,8 @@ VolumeIntegrator *MakeVolumeIntegrator(const string &name,
         vi = CreateSingleScatteringIntegrator(paramSet);
     else if (name == "emission")
         vi = CreateEmissionVolumeIntegrator(paramSet);
+	else if (name == "__mask")
+		vi = new MaskVolumeIntegrator();
     else
         Warning("Volume integrator \"%s\" unknown.", name.c_str());
     paramSet.ReportUnused();
@@ -1062,6 +1091,7 @@ void pbrtShape(const string &name, const ParamSet &params) {
     else {
 		if (!differentialOn) renderOptions->primitives0.push_back(prim);
 		renderOptions->primitives1.push_back(prim);
+		if (differentialOn) renderOptions->primitives2.push_back(prim);
         if (area != NULL) {
 			if (!differentialOn) renderOptions->lights0.push_back(area);
             renderOptions->lights1.push_back(area);
@@ -1099,7 +1129,10 @@ void pbrtVolume(const string &name, const ParamSet &params) {
     VERIFY_WORLD("Volume");
     WARN_IF_ANIMATED_TRANSFORM("Volume");
     VolumeRegion *vr = MakeVolumeRegion(name, curTransform[0], params);
-    if (vr) renderOptions->volumeRegions.push_back(vr);
+    if (vr) {
+		if (!differentialOn) renderOptions->volumeRegions0.push_back(vr);
+		renderOptions->volumeRegions1.push_back(vr);
+	}
 }
 
 
@@ -1152,10 +1185,10 @@ void pbrtObjectInstance(const string &name) {
     AnimatedTransform animatedWorldToInstance(world2instance[0],
         renderOptions->transformStartTime,
         world2instance[1], renderOptions->transformEndTime);
-    Reference<Primitive> prim =
-        new TransformedPrimitive(in[0], animatedWorldToInstance);
+    Reference<Primitive> prim = new TransformedPrimitive(in[0], animatedWorldToInstance);
 	if (!differentialOn) renderOptions->primitives0.push_back(prim);
 	renderOptions->primitives1.push_back(prim);
+	if (differentialOn) renderOptions->primitives2.push_back(prim);
 }
 
 
@@ -1202,15 +1235,28 @@ void pbrtWorldEnd() {
 	if (differentialEnable) {
 		// Create scene and render
 		differentialOn = false;
-		Renderer *renderer0 = renderOptions->MakeRenderer();
-		Scene *scene0 = renderOptions->MakeScene();
-		differentialOn = true;
-		Renderer *renderer1 = renderOptions->MakeRenderer();
-		Scene *scene1 = renderOptions->MakeScene();
+
+		// scene - differential
+		Renderer *renderer0 = renderOptions->MakeRenderer(renderOptions->primitives0, renderOptions->lights0, renderOptions->volumeRegions0);
+		Scene *scene0 = renderOptions->MakeScene(renderOptions->primitives0, renderOptions->lights0, renderOptions->volumeRegions0);
+
+		// whole scene
+		Renderer *renderer1 = renderOptions->MakeRenderer(renderOptions->primitives1, renderOptions->lights1, renderOptions->volumeRegions1);
+		Scene *scene1 = renderOptions->MakeScene(renderOptions->primitives1, renderOptions->lights1, renderOptions->volumeRegions1);
+
+		// just differential, in mask mode
+		renderOptions->SurfIntegratorName = "__mask";
+		renderOptions->VolIntegratorName = "__mask";
+		vector<Light *> lights2;
+		vector<VolumeRegion *> vol2;
+		Renderer *renderer2 = renderOptions->MakeRenderer(renderOptions->primitives2, lights2, vol2);
+		Scene *scene2 = renderOptions->MakeScene(renderOptions->primitives2, lights2, vol2);
 
 		float *image0 = new float[w * h * 3];
 		float *image1 = new float[w * h * 3];
 		float *image2 = new float[w * h * 3];
+		float *image3 = new float[w * h * 3];
+		float *image = new float[w * h * 3];
 
 		if (!scene0 || !renderer0 || !scene1 || !renderer1) {
 			Error("fgfdsfdhdgsdgshgs");
@@ -1218,16 +1264,17 @@ void pbrtWorldEnd() {
 		}
 
 		// render exclusive of differential
-		differentialOn = false;
 		writeImageRedirect = image0;
 		renderer0->Render(scene0);
 
 		// render inclusive of differential
-		differentialOn = true;
 		writeImageRedirect = image1;
 		renderer1->Render(scene1);
 
-		differentialOn = false;
+		// render differential mask
+		writeImageRedirect = image2;
+		renderer2->Render(scene2);
+
 		writeImageRedirect = NULL;
 
 		TasksCleanup();
@@ -1261,24 +1308,52 @@ void pbrtWorldEnd() {
 					bg[2] /= exposure;
 				}
 			}
-			image2[3 * i + 0] = diffscale * (image1[3 * i + 0] - image0[3 * i + 0]) + bg[0];
-			image2[3 * i + 1] = diffscale * (image1[3 * i + 1] - image0[3 * i + 1]) + bg[1];
-			image2[3 * i + 2] = diffscale * (image1[3 * i + 2] - image0[3 * i + 2]) + bg[2];
+			
+			// interpolant between differential and replace
+			float t = Clamp(image2[3 * i], 0.f, 1.f);
+
+			float d0[3], d1[3];
+
+			// differential
+			d0[0] = diffscale * (image1[3 * i + 0] - image0[3 * i + 0]);
+			d0[1] = diffscale * (image1[3 * i + 1] - image0[3 * i + 1]);
+			d0[2] = diffscale * (image1[3 * i + 2] - image0[3 * i + 2]);
+
+			image3[3 * i + 0] = d0[0] + 1;
+			image3[3 * i + 1] = d0[1] + 1;
+			image3[3 * i + 2] = d0[2] + 1;
+
+			// replace
+			d1[0] = diffscale * image1[3 * i + 0];
+			d1[1] = diffscale * image1[3 * i + 1];
+			d1[2] = diffscale * image1[3 * i + 2];
+
+			// interpolate
+			image[3 * i + 0] = Lerp(t, d0[0] + bg[0], d1[0]);
+			image[3 * i + 1] = Lerp(t, d0[1] + bg[1], d1[1]);
+			image[3 * i + 2] = Lerp(t, d0[2] + bg[2], d1[2]);
 		}
 
 		string filename = renderOptions->FilmParams.FindOneFilename("filename", "pbrt.exr");
 
-		WriteImage(filename, image2, NULL, w, h, w, h, 0, 0);
+		WriteImage(filename, image, NULL, w, h, w, h, 0, 0);
+
+		WriteImage(filename + ".0.exr", image0, NULL, w, h, w, h, 0, 0);
+		WriteImage(filename + ".1.exr", image1, NULL, w, h, w, h, 0, 0);
+		WriteImage(filename + ".2.exr", image2, NULL, w, h, w, h, 0, 0);
+		WriteImage(filename + ".3.exr", image3, NULL, w, h, w, h, 0, 0);
 
 		delete[] image0;
 		delete[] image1;
 		delete[] image2;
+		delete[] image3;
+		delete[] image;
 
 	} else {
 		// Create scene and render
 		differentialOn = true;
-		Renderer *renderer = renderOptions->MakeRenderer();
-		Scene *scene = renderOptions->MakeScene();
+		Renderer *renderer = renderOptions->MakeRenderer(renderOptions->primitives1, renderOptions->lights1, renderOptions->volumeRegions1);
+		Scene *scene = renderOptions->MakeScene(renderOptions->primitives1, renderOptions->lights1, renderOptions->volumeRegions1);
 		differentialOn = false;
 		if (!scene || !renderer) {
 			Error("argdsfgfdhsgdh");
@@ -1336,10 +1411,8 @@ void pbrtDifferentialEnd() {
 	differentialOn = false;
 }
 
-Scene *RenderOptions::MakeScene() {
-	auto &primitives = differentialOn ? primitives1 : primitives0;
-	auto &lights = differentialOn ? lights1 : lights0;
-    // Initialize _volumeRegion_ from volume region(s)
+Scene *RenderOptions::MakeScene(vector<Reference<Primitive>> &primitives, vector<Light *> &lights, vector<VolumeRegion *> &volumeRegions) {
+	// Initialize _volumeRegion_ from volume region(s)
     VolumeRegion *volumeRegion;
     if (volumeRegions.size() == 0)
         volumeRegion = NULL;
@@ -1355,17 +1428,15 @@ Scene *RenderOptions::MakeScene() {
         Severe("Unable to create \"bvh\" accelerator.");
     Scene *scene = new Scene(accelerator, lights, volumeRegion);
     // Erase primitives, lights, and volume regions from _RenderOptions_
-    primitives.erase(primitives.begin(), primitives.end());
-    lights.erase(lights.begin(), lights.end());
-    volumeRegions.erase(volumeRegions.begin(), volumeRegions.end());
+    //primitives.erase(primitives.begin(), primitives.end());
+    //lights.erase(lights.begin(), lights.end());
+    //volumeRegions.erase(volumeRegions.begin(), volumeRegions.end());
     return scene;
 }
 
 
-Renderer *RenderOptions::MakeRenderer() const {
-	auto &primitives = differentialOn ? primitives1 : primitives0;
-	auto &lights = differentialOn ? lights1 : lights0;
-    Renderer *renderer = NULL;
+Renderer *RenderOptions::MakeRenderer(vector<Reference<Primitive>> &primitives, vector<Light *> &lights, vector<VolumeRegion *> &volumeRegions) const {
+	Renderer *renderer = NULL;
     Camera *camera = MakeCamera();
     if (RendererName == "metropolis") {
         renderer = CreateMetropolisRenderer(RendererParams, camera);
