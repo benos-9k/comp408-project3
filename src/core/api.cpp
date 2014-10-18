@@ -1229,6 +1229,12 @@ void pbrtWorldEnd() {
 		}
 	}
 
+	if (!(w || h)) {
+		Warning("Unable to determine resolution, using 128x128");
+		w = 128;
+		h = 128;
+	}
+
 	renderOptions->FilmParams.AddInt("xresolution", &w, 1);
 	renderOptions->FilmParams.AddInt("yresolution", &h, 1);
 
